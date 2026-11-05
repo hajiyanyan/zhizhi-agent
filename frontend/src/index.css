@@ -1,0 +1,252 @@
+
+@import "tailwindcss";
+
+/* ================================
+   1. 全局主题变量
+================================ */
+
+:root {
+  font-family:
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    "PingFang SC",
+    "Microsoft YaHei",
+    sans-serif;
+
+  color: #f4f3ff;
+  background: #15172f;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  --bg-deep: #15172f;
+  --bg-purple: #252548;
+
+  --purple: #9290ed;
+  --purple-light: #b9b5ff;
+  --cyan: #83dafa;
+
+  --glass: rgba(255, 255, 255, 0.1);
+  --glass-border: rgba(255, 255, 255, 0.15);
+
+  --text-primary: #f5f4ff;
+  --text-secondary: #b9bad0;
+
+  --glass-shadow:
+    0 12px 40px rgba(5, 6, 25, 0.18);
+}
+
+/* ================================
+   2. 页面基础设置
+================================ */
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  scroll-behavior: smooth;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+
+  background:
+    radial-gradient(
+      ellipse at 75% 8%,
+      rgba(113, 105, 184, 0.24),
+      transparent 38%
+    ),
+    radial-gradient(
+      ellipse at 10% 80%,
+      rgba(72, 107, 164, 0.18),
+      transparent 40%
+    ),
+    linear-gradient(
+      135deg,
+      #15172f,
+      #20213f 55%,
+      #171b35
+    );
+
+  background-attachment: fixed;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:focus-visible,
+a:focus-visible {
+  outline: 3px solid rgba(131, 218, 250, 0.7);
+  outline-offset: 3px;
+}
+
+::selection {
+  color: #17172f;
+  background: #b9b5ff;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* ================================
+   3. 毛玻璃面板
+================================ */
+
+.glass-panel {
+  background: rgba(255, 255, 255, 0.1);
+
+  border: 1px solid rgba(255, 255, 255, 0.15);
+
+  box-shadow: var(--glass-shadow);
+
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+
+  border-radius: 20px;
+}
+
+/* ================================
+   4. 毛玻璃卡片
+================================ */
+
+.glass-card {
+  background: rgba(255, 255, 255, 0.085);
+
+  border: 1px solid rgba(255, 255, 255, 0.13);
+
+  border-radius: 20px;
+
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+
+  transition:
+    transform 0.3s ease,
+    background 0.3s ease,
+    border-color 0.3s ease,
+    box-shadow 0.3s ease;
+}
+
+.glass-card:hover {
+  transform: translateY(-4px);
+
+  background: rgba(255, 255, 255, 0.13);
+
+  border-color: rgba(166, 161, 255, 0.55);
+
+  box-shadow:
+    0 16px 40px rgba(5, 6, 25, 0.2),
+    0 0 18px rgba(146, 144, 237, 0.12);
+}
+
+/* ================================
+   5. 背景动态光斑
+================================ */
+
+.ambient-glow {
+  position: absolute;
+
+  border-radius: 9999px;
+
+  filter: blur(85px);
+
+  pointer-events: none;
+
+  opacity: 0.35;
+
+  animation:
+    ambient-float 12s ease-in-out infinite alternate;
+}
+
+@keyframes ambient-float {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+
+  to {
+    transform: translate3d(18px, -16px, 0);
+  }
+}
+
+/* ================================
+   6. 渐变文字
+================================ */
+
+.gradient-text {
+  color: transparent;
+
+  background: linear-gradient(
+    100deg,
+    #ffffff,
+    #c7c2ff,
+    #83dafa
+  );
+
+  background-clip: text;
+  -webkit-background-clip: text;
+}
+
+/* ================================
+   7. 自定义滚动条
+================================ */
+
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(190, 185, 255, 0.25);
+  border-radius: 20px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(190, 185, 255, 0.45);
+}
+
+/* ================================
+   8. 动态效果兼容
+================================ */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ================================
+   9. 移动端适配
+================================ */
+
+@media (max-width: 768px) {
+  .glass-panel {
+    border-radius: 16px;
+  }
+
+  .glass-card {
+    border-radius: 16px;
+  }
+}
