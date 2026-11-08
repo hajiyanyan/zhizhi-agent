@@ -1,6 +1,6 @@
 
 // 所有 API 请求都走当前网页域名，由 Vite 代理转发到 FastAPI
-const API_BASE_URL = ''
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
 // ==================== 统一 HTTP 请求 ====================
 
 async function request<T>(
