@@ -1,0 +1,22 @@
+# Web API
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+
+# Database
+sqlalchemy>=2.0,<3.0
+
+# LLM
+openai>=1.0,<4.0
+python-dotenv>=1.0,<2.0
+
+# Resume upload and parsing
+python-multipart>=0.0.9,<1.0
+python-docx>=1.1,<2.0
+pypdf>=5.0,<7.0
+
+# 408 knowledge base and vector retrieval
+chromadb>=1.0,<2.0
+sentence-transformers>=5.0,<7.0
+
+# PostgreSQL
+psycopg[binary]>=3.2,<4.0
