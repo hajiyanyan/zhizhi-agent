@@ -6,6 +6,8 @@ from typing import Literal
 
 from io import BytesIO
 from datetime import datetime
+from contextlib import asynccontextmanager
+from starlette.concurrency import run_in_threadpool
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -81,10 +83,22 @@ class UpdateKnowledgeRequest(BaseModel):
 # 二、应用初始化
 # =========================================================
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("正在初始化数据库...", flush=True)
+
+    await run_in_threadpool(init_db)
+
+    print("数据库初始化成功！", flush=True)
+
+    yield
+
+
 app = FastAPI(
     title="职智 Agent",
     description="面向计算机考研 408 复试的个性化 AI 模拟面试平台",
     version="0.3.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -98,8 +112,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 确保数据库和数据表已经初始化
-init_db()
+
 
 
 @app.get("/")
