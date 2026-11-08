@@ -152,7 +152,7 @@ const features = [
 ]
 
 function App() {
-  const [knowledgeHasEvidence, setKnowledgeHasEvidence] = useState(false)
+  const [knowledgeHasEvidence] = useState(false)
   const [activeNav, setActiveNav] = useState('工作台')
   const [notice, setNotice] = useState('')
   const [sidebarOpen, setSidebarOpen] = useState(false)
