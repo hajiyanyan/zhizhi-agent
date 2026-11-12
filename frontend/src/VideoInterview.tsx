@@ -477,7 +477,7 @@ export default function VideoInterview({
       })
 
       sessionIdRef.current = data.session_id
-      setStatus('正在连接豆包实时语音服务…')
+      setStatus('正在建立面试连接…')
 
       const source = new EventSource(
         `${API}/events?session_id=${encodeURIComponent(data.session_id)}`
@@ -494,12 +494,12 @@ export default function VideoInterview({
 
         if (message.type === 'local.connected') {
           setConnected(true)
-          setStatus('豆包已连接，正在启动麦克风…')
+          setStatus('连接成功，正在启动麦克风…')
           setAvatarState('speaking')
           try {
             await startMicrophone()
             setStatus('面试进行中，请直接对着麦克风回答')
-            setCurrentQuestion('豆包面试官已进入面试，请听取开场问题')
+            setCurrentQuestion('面试官已进入面试，请听取开场问题')
           } catch {
             setError('麦克风启动失败，请允许浏览器使用麦克风后重试。')
             setStatus('麦克风不可用')
@@ -737,7 +737,7 @@ export default function VideoInterview({
             <button onClick={() => void handleStart()} disabled={starting || resumeUploading}
               className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-blue-600 px-8 py-3 font-medium shadow-lg shadow-violet-900/30 hover:opacity-90 disabled:opacity-50">
               {starting ? <Loader2 className="animate-spin" size={18} /> : <Sparkles size={18} />}
-              {starting ? '正在连接豆包…' : '开始视频面试'}
+              {starting ? '正在建立连接…' : '开始视频面试'}
             </button>
           ) : (
             <button onClick={() => void handleEnd()}
@@ -754,7 +754,7 @@ export default function VideoInterview({
         </div>
 
         <p className="mt-5 text-center text-xs text-slate-500">
-          摄像头画面仅在本地预览；实时语音由豆包 Seeduplex 提供。
+          摄像头画面仅在本地预览；实时语音服务已就绪。
         </p>
       </div>
     </div>
