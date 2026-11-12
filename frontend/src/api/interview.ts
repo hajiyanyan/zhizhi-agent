@@ -1,9 +1,6 @@
 
-// 本地开发使用 Vite 代理；生产环境默认直连 Render 后端。
-export const API_BASE_URL = (
-  import.meta.env.VITE_API_BASE_URL ||
-  (import.meta.env.DEV ? '' : 'https://zhizhi-agent-backend.onrender.com')
-).replace(/\/$/, '')
+// 开发环境由 Vite 代理；生产环境由 Vercel Rewrite 转发到 Render，浏览器请求保持同源。
+export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
 // ==================== 统一 HTTP 请求 ====================
 
 async function request<T>(
@@ -16,7 +13,7 @@ async function request<T>(
     response = await fetch(`${API_BASE_URL}${path}`, {
       ...options,
       headers: {
-        'Content-Type': 'application/json',
+        ...(options.body ? { 'Content-Type': 'application/json' } : {}),
         ...options.headers,
       },
     })
