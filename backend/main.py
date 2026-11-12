@@ -110,6 +110,8 @@ app.add_middleware(
         "https://zhizhi-agent.vercel.app",
         "https://zhizhi-agent-fjiu.vercel.app",
     ],
+    # 同时允许 Vercel 自动生成的预览/部署域名，避免生产预览域名触发 CORS 预检失败
+    allow_origin_regex=r"https://[a-z0-9-]+\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
