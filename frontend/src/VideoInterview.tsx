@@ -228,7 +228,7 @@ export default function VideoInterview({
           await requestJSON('audio_commit', {
             session_id: sessionId,
           })
-          console.log('本轮语音已提交，等待豆包回答')
+          console.log('本轮语音已提交，等待面试官回答')
         }
       } catch (err) {
         if (mountedRef.current) {
@@ -425,7 +425,7 @@ export default function VideoInterview({
     }
 
     if (type === 'error') {
-      setError(text || '豆包实时语音发生错误')
+      setError(text || '实时语音服务暂时不可用')
       setAvatarState('standby')
     }
   }
