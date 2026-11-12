@@ -1671,3 +1671,11 @@ async def read_interview_report(session_id: str):
             status_code=500,
             detail=f"查询面试报告失败：{str(exc)}",
         )
+
+# 独立豆包实时视频面试接口
+try:
+    from video_routes import router as video_router
+except ImportError:
+    from backend.video_routes import router as video_router
+
+app.include_router(video_router)

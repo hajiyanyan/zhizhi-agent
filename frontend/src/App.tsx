@@ -1,6 +1,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Interview from './Interview'
+import VideoInterview from './VideoInterview'
 
 import {
   queryKnowledge,
@@ -76,6 +77,7 @@ type NavItem = {
 const navItems: NavItem[] = [
   { label: '工作台', icon: LayoutDashboard },
   { label: '模拟面试', icon: Video },
+  { label: '视频面试', icon: Video },
   { label: '知识记忆', icon: BrainCircuit },
   { label: '专业知识库', icon: BookOpen },
   { label: '面试报告', icon: FileText },
@@ -158,6 +160,7 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [searchText, setSearchText] = useState('')
   const [showInterview, setShowInterview] = useState(false)
+  const [showVideoInterview, setShowVideoInterview] = useState(false)
   const [selectedMode, setSelectedMode] = useState('data-structure')
 
   // 专业知识库检索状态
@@ -205,6 +208,7 @@ function App() {
     setActiveNav(label)
     setNotice('')
     setSidebarOpen(false)
+    if (label === '视频面试') setShowVideoInterview(true)
   }
 
   const handleStartInterview = () => {
@@ -661,6 +665,19 @@ const getSessionStatus = (session: InterviewSession) => {
     }
 
     handleNavClick(target)
+  }
+
+  if (showVideoInterview) {
+    return (
+      <VideoInterview
+        defaultPressureMode={defaultPressureMode}
+        defaultQuestionCount={defaultQuestionCount}
+        onBack={() => {
+          setShowVideoInterview(false)
+          setActiveNav('工作台')
+        }}
+      />
+    )
   }
 
   if (showInterview) {
