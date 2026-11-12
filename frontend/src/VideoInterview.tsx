@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { uploadResume } from './api/interview'
+import { API_BASE_URL, uploadResume } from './api/interview'
 import {
   ArrowLeft, Camera, CameraOff, Mic, MicOff, PhoneOff,
   Sparkles, Volume2, Loader2
@@ -13,7 +13,7 @@ interface VideoInterviewProps {
 
 type Message = { role: '考生' | '面试官'; text: string }
 
-const API = '/api/video'
+const API = `${API_BASE_URL}/api/video`
 
 function bytesToBase64(bytes: Uint8Array) {
   let binary = ''
