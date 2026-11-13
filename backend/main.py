@@ -42,6 +42,7 @@ from services.models import (
     InterviewMessage,
     Evaluation,
     InterviewReport,
+    VideoReportTask,
 )
 
 def sse_event(event: str, data: dict) -> str:
@@ -1391,6 +1392,15 @@ async def get_interview_sessions(user_id: int):
                     )
                     .order_by(InterviewReport.id.desc())
                 )
+                report_task = db.get(VideoReportTask, session.id)
+
+                report_status = (
+                    "completed"
+                    if report is not None
+                    else report_task.status
+                    if report_task is not None
+                    else "not_started"
+                )
 
                 results.append({
                     "session_id": session.id,
@@ -1409,6 +1419,7 @@ async def get_interview_sessions(user_id: int):
                     "title": first_question[:80],
                     "finished": session.phase == "finished",
                     "has_report": report is not None,
+                    "report_status": report_status,
                 })
 
             return {
