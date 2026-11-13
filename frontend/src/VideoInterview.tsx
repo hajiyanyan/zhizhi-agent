@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import { API_BASE_URL, uploadResume } from './api/interview'
 import {
   ArrowLeft, Camera, CameraOff, Mic, MicOff, PhoneOff,
-  Sparkles, Volume2, Loader2
+  Sparkles, Volume2, Loader2, CheckCircle2, AlertCircle, RefreshCw, Target, BookOpen
 } from 'lucide-react'
 
 interface VideoInterviewProps {
   onBack: () => void
   defaultPressureMode?: boolean
   defaultQuestionCount?: number
+  userId: number
 }
 
 type Message = { role: '考生' | '面试官'; text: string }
@@ -32,6 +33,7 @@ export default function VideoInterview({
   onBack,
   defaultPressureMode = false,
   defaultQuestionCount = 8,
+  userId,
 }: VideoInterviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
@@ -64,6 +66,10 @@ export default function VideoInterview({
   const [status, setStatus] = useState('填写资料后开始视频面试')
   const [error, setError] = useState('')
   const [messages, setMessages] = useState<Message[]>([])
+  const [reportSessionId, setReportSessionId] = useState('')
+  const [reportStatus, setReportStatus] = useState<'idle' | 'pending' | 'running' | 'completed' | 'failed'>('idle')
+  const [report, setReport] = useState<Record<string, unknown> | null>(null)
+  const [reportError, setReportError] = useState('')
   const [currentQuestion, setCurrentQuestion] = useState('等待面试开始')
 
   useEffect(() => {
@@ -73,6 +79,59 @@ export default function VideoInterview({
       stopResources()
     }
   }, [])
+
+  // 面试结束后轮询后台报告状态；此轮询不会进入实时音频链路。
+  useEffect(() => {
+    if (!finished || !reportSessionId || !['pending', 'running'].includes(reportStatus)) return
+
+    let active = true
+    let timer: number | undefined
+    let attempts = 0
+
+    const poll = async () => {
+      if (!active) return
+      attempts += 1
+      try {
+        const response = await fetch(`${API}/report-status/${encodeURIComponent(reportSessionId)}`)
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(data.detail || `查询报告状态失败：${response.status}`)
+
+        if (data.status === 'completed' && data.report) {
+          setReport(data.report as Record<string, unknown>)
+          setReportStatus('completed')
+          setReportError('')
+          setStatus('面试已结束，分析报告已生成')
+          active = false
+          return
+        }
+
+        if (data.status === 'failed') {
+          setReportStatus('failed')
+          setReportError(String(data.error || '报告生成失败，可点击重试。'))
+          active = false
+          return
+        }
+
+        setReportStatus(data.status === 'running' ? 'running' : 'pending')
+      } catch (err) {
+        setReportError(err instanceof Error ? err.message : '报告状态暂时无法获取，系统会继续尝试。')
+      }
+
+      if (attempts >= 180) {
+        setReportStatus('failed')
+        setReportError('报告生成时间较长。面试记录已保存，可稍后重试生成报告。')
+        active = false
+        return
+      }
+      if (active) timer = window.setTimeout(() => void poll(), 2500)
+    }
+
+    void poll()
+    return () => {
+      active = false
+      if (timer !== undefined) window.clearTimeout(timer)
+    }
+  }, [finished, reportSessionId])
 
   function stopResources() {
     eventSourceRef.current?.close()
@@ -468,6 +527,7 @@ export default function VideoInterview({
       await context.resume()
 
       const data = await requestJSON('session', {
+        user_id: userId,
         major,
         research_direction: researchDirection,
         target_school: targetSchool,
@@ -477,6 +537,10 @@ export default function VideoInterview({
       })
 
       sessionIdRef.current = data.session_id
+      setReportSessionId(data.session_id)
+      setReportStatus('idle')
+      setReport(null)
+      setReportError('')
       setStatus('正在建立面试连接…')
 
       const source = new EventSource(
@@ -553,15 +617,45 @@ export default function VideoInterview({
     sessionIdRef.current = ''
     stopResources()
     setFinished(true)
-    setStatus('本次视频面试已结束')
     setAvatarState('standby')
+    setReportStatus('pending')
+    setReportError('')
+    setReportSessionId(id)
+    setStatus('面试已结束，正在保存记录并生成分析报告…')
 
-    if (id) {
-      try {
-        await requestJSON('close', { session_id: id })
-      } catch {
-        // 本地资源已关闭，服务端会话关闭失败不阻止退出
-      }
+    if (!id) {
+      setReportStatus('failed')
+      setReportError('未找到本场面试编号，无法生成报告。')
+      return
+    }
+
+    try {
+      // 先保存完整转写并结束数据库场次；报告分析由后端后台任务执行。
+      await requestJSON('finish', {
+        session_id: id,
+        messages,
+      })
+    } catch (err) {
+      setReportStatus('failed')
+      setReportError(err instanceof Error ? err.message : '面试记录保存失败，可点击重试。')
+    } finally {
+      // 关闭实时语音连接不等待报告分析。
+      void requestJSON('close', { session_id: id }).catch(() => undefined)
+    }
+  }
+
+  async function retryReport() {
+    if (!reportSessionId) return
+    setReportStatus('pending')
+    setReportError('')
+    try {
+      await requestJSON('finish', {
+        session_id: reportSessionId,
+        messages: [],
+      })
+    } catch (err) {
+      setReportStatus('failed')
+      setReportError(err instanceof Error ? err.message : '报告重试失败，请稍后再试。')
     }
   }
 
@@ -723,6 +817,131 @@ export default function VideoInterview({
                 </div>
               ))}
             </div>
+          </section>
+        )}
+
+        {finished && (
+          <section className="mt-6 rounded-2xl border border-violet-300/20 bg-gradient-to-br from-violet-500/[0.09] to-blue-500/[0.06] p-5 sm:p-6">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-xs tracking-[2px] text-violet-200/60">POST-INTERVIEW ANALYSIS</p>
+                <h2 className="mt-1 text-lg font-semibold">408 视频面试分析报告</h2>
+              </div>
+              {reportStatus === 'completed' && (
+                <span className="inline-flex items-center gap-2 rounded-lg border border-emerald-300/20 bg-emerald-400/10 px-3 py-2 text-xs text-emerald-200">
+                  <CheckCircle2 size={15} /> 分析完成
+                </span>
+              )}
+            </div>
+
+            {(reportStatus === 'pending' || reportStatus === 'running' || reportStatus === 'idle') && (
+              <div className="mt-5 flex items-center gap-3 rounded-xl border border-white/10 bg-black/15 p-4">
+                <Loader2 size={20} className="animate-spin text-violet-200" />
+                <div>
+                  <p className="text-sm font-medium text-white/85">面试已结束，正在后台分析</p>
+                  <p className="mt-1 text-xs leading-5 text-slate-400">实时语音连接已关闭，报告生成不会占用面试过程。完成后会自动显示并保存到「面试报告」。</p>
+                </div>
+              </div>
+            )}
+
+            {reportStatus === 'failed' && (
+              <div className="mt-5 rounded-xl border border-amber-300/20 bg-amber-400/[0.07] p-4">
+                <div className="flex items-center gap-2 text-sm text-amber-200">
+                  <AlertCircle size={17} /> 报告暂未生成
+                </div>
+                <p className="mt-2 text-xs leading-6 text-slate-300">{reportError || '面试记录已保留，可重新发起分析。'}</p>
+                <button onClick={() => void retryReport()} className="mt-3 inline-flex items-center gap-2 rounded-lg border border-amber-200/20 bg-amber-300/10 px-4 py-2 text-xs text-amber-100 hover:bg-amber-300/20">
+                  <RefreshCw size={14} /> 重试生成报告
+                </button>
+              </div>
+            )}
+
+            {reportStatus === 'completed' && report && (
+              <div className="mt-5 space-y-5">
+                <div className="grid gap-4 md:grid-cols-[150px_1fr]">
+                  <div className="flex flex-col items-center justify-center rounded-xl border border-white/10 bg-black/15 p-5">
+                    <span className="text-xs text-slate-400">综合评分</span>
+                    <span className="mt-1 text-4xl font-bold text-violet-200">{String(report.overall_score ?? '--')}</span>
+                    <span className="mt-1 text-xs text-slate-500">满分 100</span>
+                  </div>
+                  <div className="rounded-xl border border-white/10 bg-black/15 p-4">
+                    <h3 className="mb-2 flex items-center gap-2 text-sm font-medium text-white/90"><Target size={15} className="text-violet-200" /> 综合评价</h3>
+                    <p className="text-sm leading-7 text-slate-300">{String(report.summary || '本场面试分析已完成。')}</p>
+                  </div>
+                </div>
+
+                {Array.isArray(report.dimension_analysis) && report.dimension_analysis.length > 0 && (
+                  <div>
+                    <h3 className="mb-3 text-sm font-medium text-white/85">能力维度分析</h3>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      {(report.dimension_analysis as Array<Record<string, unknown>>).map((item, index) => (
+                        <div key={index} className="rounded-xl border border-white/10 bg-black/15 p-4">
+                          <p className="text-sm font-medium text-violet-200">{String(item.dimension || '能力维度')}</p>
+                          <p className="mt-2 text-xs leading-6 text-slate-300">{String(item.analysis || '')}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {Array.isArray(report.knowledge_gaps) && report.knowledge_gaps.length > 0 && (
+                  <div>
+                    <h3 className="mb-3 flex items-center gap-2 text-sm font-medium text-white/85"><BookOpen size={15} className="text-amber-200" /> 薄弱知识点</h3>
+                    <div className="space-y-2">
+                      {(report.knowledge_gaps as Array<Record<string, unknown>>).map((item, index) => (
+                        <div key={index} className="rounded-lg border border-white/10 bg-black/15 p-3">
+                          <p className="text-sm text-amber-100">{String(item.knowledge_point || '待巩固知识点')}</p>
+                          <p className="mt-1 text-xs leading-5 text-slate-400">{String(item.analysis || '')}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {Array.isArray(report.question_reviews) && report.question_reviews.length > 0 && (
+                  <div>
+                    <h3 className="mb-3 text-sm font-medium text-white/85">问答表现</h3>
+                    <div className="space-y-3">
+                      {(report.question_reviews as Array<Record<string, unknown>>).map((item, index) => (
+                        <div key={index} className="rounded-xl border border-white/10 bg-black/15 p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <p className="text-sm leading-6 text-white/90">{index + 1}. {String(item.question || '面试问题')}</p>
+                            <span className="shrink-0 rounded-md bg-violet-400/10 px-2 py-1 text-xs text-violet-200">{String(item.score ?? '--')} 分</span>
+                          </div>
+                          <p className="mt-2 text-xs leading-6 text-slate-400">回答概括：{String(item.answer_summary || '未提供')}</p>
+                          {item.suggestion && <p className="mt-2 text-xs leading-6 text-emerald-200/80">建议：{String(item.suggestion)}</p>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {Array.isArray(report.improvement_suggestions) && report.improvement_suggestions.length > 0 && (
+                  <div>
+                    <h3 className="mb-3 text-sm font-medium text-white/85">改进建议</h3>
+                    <ul className="space-y-2">
+                      {(report.improvement_suggestions as string[]).map((item, index) => (
+                        <li key={index} className="rounded-lg border border-white/10 bg-black/15 px-4 py-3 text-xs leading-6 text-slate-300">{index + 1}. {item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {Array.isArray(report.training_plan) && report.training_plan.length > 0 && (
+                  <div>
+                    <h3 className="mb-3 text-sm font-medium text-white/85">后续训练计划</h3>
+                    <div className="grid gap-3 md:grid-cols-3">
+                      {(report.training_plan as Array<Record<string, unknown>>).map((item, index) => (
+                        <div key={index} className="rounded-xl border border-white/10 bg-black/15 p-4">
+                          <p className="text-sm font-medium text-cyan-100">{String(item.topic || ('训练任务 ' + (index + 1)))}</p>
+                          <p className="mt-2 text-xs leading-6 text-slate-400">{String(item.task || '')}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </section>
         )}
 
