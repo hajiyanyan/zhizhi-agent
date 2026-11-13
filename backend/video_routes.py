@@ -272,24 +272,28 @@ def finish_video_session(
                 task.status = "pending"
                 task.error = ""
         else:
-            # 保留对话顺序，转换为现有面试报告模块使用的角色标识。
-            last_item = None
+            # 保留对话顺序，并合并连续的同一说话人转写片段，
+            # 避免考生停顿后分段识别导致一题被拆成多条回答。
+            last_message = None
             for item in data.messages[:200]:
                 content = item.text.strip()
                 if not content:
                     continue
                 role = "candidate" if item.role == "考生" else "interviewer"
-                key = (role, content)
-                if key == last_item:
+
+                if last_message and last_message.role == role:
+                    if content != last_message.content.strip():
+                        last_message.content = (
+                            last_message.content + "\n" + content
+                        )[:12000]
                     continue
-                db.add(
-                    InterviewMessage(
-                        session_id=data.session_id,
-                        role=role,
-                        content=content,
-                    )
+
+                last_message = InterviewMessage(
+                    session_id=data.session_id,
+                    role=role,
+                    content=content,
                 )
-                last_item = key
+                db.add(last_message)
 
             session.phase = "finished"
             session.ended_at = datetime.utcnow()
