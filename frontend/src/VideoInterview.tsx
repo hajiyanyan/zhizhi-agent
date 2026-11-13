@@ -651,7 +651,7 @@ export default function VideoInterview({
     try {
       await requestJSON('finish', {
         session_id: reportSessionId,
-        messages: [],
+        messages,
       })
     } catch (err) {
       setReportStatus('failed')
