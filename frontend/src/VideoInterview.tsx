@@ -131,7 +131,7 @@ export default function VideoInterview({
       active = false
       if (timer !== undefined) window.clearTimeout(timer)
     }
-  }, [finished, reportSessionId])
+  }, [finished, reportSessionId, reportStatus])
 
   function stopResources() {
     eventSourceRef.current?.close()
