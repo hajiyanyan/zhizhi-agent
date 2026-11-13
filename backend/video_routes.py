@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
@@ -96,9 +97,36 @@ def generate_video_report_background(session_id: str):
         except ImportError:
             from backend.main import evaluate_finished_session, create_interview_report
 
-        evaluation = evaluate_finished_session(session_id)
-        if not evaluation.get("evaluated"):
-            raise ValueError("有效问答不足，暂时无法生成完整报告")
+        with SessionLocal() as db:
+            existing_report = db.scalar(
+                select(InterviewReport)
+                .where(InterviewReport.session_id == session_id)
+                .order_by(InterviewReport.id.desc())
+            )
+            existing_evaluation = db.scalar(
+                select(InterviewMessage.id)
+                .where(InterviewMessage.session_id == session_id)
+                .limit(1)
+            )
+            evaluation_count = db.query(InterviewReport).filter(
+                InterviewReport.session_id == session_id
+            ).count()
+
+        if existing_report is not None:
+            _set_report_task(session_id, "completed")
+            return
+
+        # 若之前已完成评分、仅报告生成失败，则复用评分结果，避免重试时重复写入评价。
+        with SessionLocal() as db:
+            from services.models import Evaluation
+            has_evaluations = db.query(Evaluation.id).filter(
+                Evaluation.session_id == session_id
+            ).first() is not None
+
+        if not has_evaluations:
+            evaluation = evaluate_finished_session(session_id)
+            if not evaluation.get("evaluated"):
+                raise ValueError("有效问答不足，暂时无法生成完整报告")
 
         result = asyncio.run(create_interview_report(session_id))
         if not isinstance(result, dict) or not result.get("report"):
