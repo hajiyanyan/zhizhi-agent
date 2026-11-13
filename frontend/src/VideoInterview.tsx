@@ -146,14 +146,16 @@ export default function VideoInterview({
     streamRef.current?.getTracks().forEach(track => track.stop())
     streamRef.current = null
 
-    if (outputSourceRef.current) {
+    for (const source of outputSourcesRef.current) {
       try {
-        outputSourceRef.current.stop()
+        source.stop()
       } catch {
         // 音频可能已经播放结束
       }
-      outputSourceRef.current = null
     }
+    outputSourcesRef.current.clear()
+    outputSourceRef.current = null
+    outputNextTimeRef.current = 0
 
     if (audioContextRef.current) {
       void audioContextRef.current.close()
