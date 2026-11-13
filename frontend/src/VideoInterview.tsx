@@ -62,6 +62,7 @@ export default function VideoInterview({
   const [starting, setStarting] = useState(false)
   const [connected, setConnected] = useState(false)
   const [finished, setFinished] = useState(false)
+  const [finishSaved, setFinishSaved] = useState(false)
   const [avatarState, setAvatarState] = useState<'standby' | 'thinking' | 'speaking'>('standby')
   const [status, setStatus] = useState('填写资料后开始视频面试')
   const [error, setError] = useState('')
@@ -538,6 +539,7 @@ export default function VideoInterview({
 
       sessionIdRef.current = data.session_id
       setReportSessionId(data.session_id)
+      setFinishSaved(false)
       setReportStatus('idle')
       setReport(null)
       setReportError('')
@@ -617,6 +619,7 @@ export default function VideoInterview({
     sessionIdRef.current = ''
     stopResources()
     setFinished(true)
+    setFinishSaved(false)
     setAvatarState('standby')
     setReportStatus('pending')
     setReportError('')
@@ -635,6 +638,7 @@ export default function VideoInterview({
         session_id: id,
         messages,
       })
+      setFinishSaved(true)
     } catch (err) {
       setReportStatus('failed')
       setReportError(err instanceof Error ? err.message : '面试记录保存失败，可点击重试。')
@@ -653,6 +657,7 @@ export default function VideoInterview({
         session_id: reportSessionId,
         messages,
       })
+      setFinishSaved(true)
     } catch (err) {
       setReportStatus('failed')
       setReportError(err instanceof Error ? err.message : '报告重试失败，请稍后再试。')
@@ -964,7 +969,7 @@ export default function VideoInterview({
               <PhoneOff size={18} /> 结束面试
             </button>
           )}
-          {finished && (
+          {finished && finishSaved && (
             <button onClick={onBack}
               className="rounded-xl border border-white/15 px-6 py-3 text-sm hover:bg-white/10">
               返回工作台
