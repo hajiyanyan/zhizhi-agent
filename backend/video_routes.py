@@ -208,7 +208,7 @@ async def video_events(session_id: str):
             except queue.Empty:
                 event = {"type": "local.ping", "ts": time.time()}
 
-            yield f"data: {json.dumps(event, ensure_ascii=False)}\\n\\n"
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
             if event.get("type") == "local.closed":
                 break
