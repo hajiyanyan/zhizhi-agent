@@ -169,6 +169,25 @@ class KnowledgeGap(Base):
     user: Mapped["User"] = relationship(back_populates="knowledge_gaps")
 
 
+class VideoReportTask(Base):
+    """视频面试结束后的异步报告任务状态。"""
+    __tablename__ = "video_report_tasks"
+
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("interview_sessions.id"),
+        primary_key=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), default="pending", nullable=False
+    )
+    error: Mapped[str] = mapped_column(
+        Text, default="", nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=current_time, onupdate=current_time, nullable=False
+    )
+
+
 class InterviewReport(Base):
     """面试复盘报告表。"""
     __tablename__ = "reports"
