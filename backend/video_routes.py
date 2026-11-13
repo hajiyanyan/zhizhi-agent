@@ -1,4 +1,5 @@
 import os
+import base64
 import json
 import asyncio
 import queue
@@ -9,7 +10,7 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -241,6 +242,84 @@ async def video_events(session_id: str):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.websocket("/ws")
+async def video_websocket(websocket: WebSocket, session_id: str):
+    """单条持久 WebSocket 承载浏览器音频上行与豆包事件下行。"""
+    session = duplex_runtime.STATE.get(session_id)
+    if session is None:
+        await websocket.close(code=4404, reason="视频面试会话不存在或已结束")
+        return
+
+    await websocket.accept()
+
+    async def forward_events():
+        try:
+            while True:
+                try:
+                    event = await asyncio.to_thread(session.events.get, True, 1)
+                except queue.Empty:
+                    if session.closed.is_set():
+                        break
+                    continue
+                await websocket.send_json(event)
+                if event.get("type") == "local.closed":
+                    break
+        except Exception:
+            pass
+
+    forward_task = asyncio.create_task(forward_events())
+    try:
+        while True:
+            message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                break
+
+            raw_audio = message.get("bytes")
+            if raw_audio is not None:
+                if raw_audio:
+                    session.send_audio(base64.b64encode(raw_audio).decode("ascii"))
+                continue
+
+            raw_text = message.get("text")
+            if raw_text:
+                try:
+                    payload = json.loads(raw_text)
+                except json.JSONDecodeError:
+                    await websocket.send_json({
+                        "type": "local.error",
+                        "message": "无法识别的实时控制消息",
+                    })
+                    continue
+
+                event_type = payload.get("type")
+                if event_type == "audio_commit":
+                    session.commit_audio()
+                elif event_type == "text":
+                    text_value = str(payload.get("text") or "").strip()
+                    if text_value:
+                        session.send_text(text_value)
+                elif event_type == "close":
+                    break
+    except WebSocketDisconnect:
+        pass
+    except Exception as exc:
+        try:
+            await websocket.send_json({
+                "type": "local.error",
+                "message": f"实时音频传输失败：{exc}",
+            })
+        except Exception:
+            pass
+    finally:
+        forward_task.cancel()
+        try:
+            await forward_task
+        except asyncio.CancelledError:
+            pass
+        # 浏览器断开时释放豆包上游连接，避免遗留会话。
+        duplex_runtime.STATE.close(session_id)
 
 
 @router.post("/audio")
