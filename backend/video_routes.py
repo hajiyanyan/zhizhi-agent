@@ -253,6 +253,7 @@ async def video_websocket(websocket: WebSocket, session_id: str):
         return
 
     await websocket.accept()
+    await websocket.send_json({"type": "local.connected"})
 
     async def forward_events():
         try:
@@ -263,9 +264,10 @@ async def video_websocket(websocket: WebSocket, session_id: str):
                     if session.closed.is_set():
                         break
                     continue
-                await websocket.send_json(event)
                 if event.get("type") == "local.closed":
+                    await websocket.send_json(event)
                     break
+                await websocket.send_json({"type": "upstream.event", "event": event})
         except Exception:
             pass
 
