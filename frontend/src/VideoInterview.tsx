@@ -40,11 +40,10 @@ export default function VideoInterview({
   const audioContextRef = useRef<AudioContext | null>(null)
   const processorRef = useRef<ScriptProcessorNode | null>(null)
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
-  const eventSourceRef = useRef<EventSource | null>(null)
+  const websocketRef = useRef<WebSocket | null>(null)
   const sessionIdRef = useRef('')
   const audioQueueRef = useRef<Uint8Array[]>([])
   const outputAudioChunksRef = useRef<Uint8Array[]>([])
-  const audioSendingRef = useRef(false)
   const outputSourceRef = useRef<AudioBufferSourceNode | null>(null)
   const mountedRef = useRef(true)
   const micEnabledRef = useRef(true)
@@ -135,8 +134,8 @@ export default function VideoInterview({
   }, [finished, reportSessionId, reportStatus])
 
   function stopResources() {
-    eventSourceRef.current?.close()
-    eventSourceRef.current = null
+    websocketRef.current?.close()
+    websocketRef.current = null
 
     processorRef.current?.disconnect()
     sourceRef.current?.disconnect()
@@ -206,24 +205,14 @@ export default function VideoInterview({
     return output
   }
 
-  async function flushAudioQueue() {
-    if (audioSendingRef.current || !sessionIdRef.current) return
-    audioSendingRef.current = true
+  function flushAudioQueue() {
+    const socket = websocketRef.current
+    if (!socket || socket.readyState !== WebSocket.OPEN) return
 
-    try {
-      while (audioQueueRef.current.length && sessionIdRef.current) {
-        const chunk = audioQueueRef.current.shift()!
-        await requestJSON('audio', {
-          session_id: sessionIdRef.current,
-          audio: bytesToBase64(chunk),
-        })
-      }
-    } catch (err) {
-      if (mountedRef.current) {
-        setError(err instanceof Error ? err.message : '音频发送失败')
-      }
-    } finally {
-      audioSendingRef.current = false
+    // 持久 WebSocket 直接发送二进制 PCM，避免每 100ms 发起一次 HTTP 请求。
+    while (audioQueueRef.current.length && socket.readyState === WebSocket.OPEN) {
+      const chunk = audioQueueRef.current.shift()
+      if (chunk) socket.send(chunk)
     }
   }
 
@@ -263,32 +252,19 @@ export default function VideoInterview({
       silenceFrames = 0
 
       try {
-        // 把最后不足 100ms 的音频也发送出去
+        // 发送最后不足 100ms 的音频。WebSocket 保证同一连接内帧顺序，
+        // commit 控制帧会排在此前所有 PCM 二进制帧之后。
         if (pending.length) {
-          audioQueueRef.current.push(
-            new Uint8Array(pending.splice(0, pending.length))
-          )
+          audioQueueRef.current.push(new Uint8Array(pending.splice(0, pending.length)))
         }
+        flushAudioQueue()
 
-        // 等待此前的音频发送完毕
-        while (audioSendingRef.current && sessionIdRef.current) {
-          await new Promise(resolve => window.setTimeout(resolve, 10))
-        }
-
-        if (audioQueueRef.current.length && sessionIdRef.current) {
-          await flushAudioQueue()
-        }
-
-        while (audioSendingRef.current && sessionIdRef.current) {
-          await new Promise(resolve => window.setTimeout(resolve, 10))
-        }
-
-        const sessionId = sessionIdRef.current
-        if (sessionId) {
-          await requestJSON('audio_commit', {
-            session_id: sessionId,
-          })
+        const socket = websocketRef.current
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: 'audio_commit' }))
           console.log('本轮语音已提交，等待面试官回答')
+        } else {
+          throw new Error('实时连接已断开，请重新开始面试。')
         }
       } catch (err) {
         if (mountedRef.current) {
@@ -545,15 +521,17 @@ export default function VideoInterview({
       setReportError('')
       setStatus('正在建立面试连接…')
 
-      const source = new EventSource(
-        `${API}/events?session_id=${encodeURIComponent(data.session_id)}`
-      )
-      eventSourceRef.current = source
+      const wsUrl = new URL(`${API}/ws`)
+      wsUrl.protocol = wsUrl.protocol === 'https:' ? 'wss:' : 'ws:'
+      wsUrl.searchParams.set('session_id', data.session_id)
 
-      source.onmessage = async event => {
+      const socket = new WebSocket(wsUrl.toString())
+      websocketRef.current = socket
+
+      socket.onmessage = async event => {
         let message: Record<string, unknown>
         try {
-          message = JSON.parse(event.data)
+          message = JSON.parse(String(event.data))
         } catch {
           return
         }
@@ -591,8 +569,16 @@ export default function VideoInterview({
         }
       }
 
-      source.onerror = () => {
+      socket.onerror = () => {
+        if (mountedRef.current) {
+          setError('实时音频连接失败，请检查网络后重试。')
+          setStatus('连接异常')
+        }
+      }
+
+      socket.onclose = () => {
         if (mountedRef.current && sessionIdRef.current) {
+          setConnected(false)
           setStatus('实时连接中断，请检查网络或后端服务')
         }
       }
