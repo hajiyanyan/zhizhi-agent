@@ -4,16 +4,26 @@ import asyncio
 import queue
 import time
 import tempfile
+from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 import duplex_runtime
+from services.database import SessionLocal
+from services.models import (
+    User,
+    InterviewSession,
+    InterviewMessage,
+    InterviewReport,
+    VideoReportTask,
+)
 
 router = APIRouter(prefix="/api/video", tags=["video-interview"])
 
@@ -23,6 +33,7 @@ class VideoSessionRequest(BaseModel):
     research_direction: str = ""
     target_school: str = ""
     resume_text: str
+    user_id: int = 1
     pressure_mode: bool = False
     max_questions: int = 8
 
@@ -41,11 +52,67 @@ class TextRequest(BaseModel):
     text: str
 
 
+class TranscriptMessage(BaseModel):
+    role: Literal["考生", "面试官"]
+    text: str = Field(min_length=1, max_length=12000)
+
+
+class FinishVideoRequest(BaseModel):
+    session_id: str
+    messages: list[TranscriptMessage] = Field(default_factory=list)
+
+
 def get_session(session_id: str):
     session = duplex_runtime.STATE.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="视频面试会话不存在或已结束")
     return session
+
+
+def _set_report_task(session_id: str, status: str, error: str = ""):
+    with SessionLocal() as db:
+        task = db.get(VideoReportTask, session_id)
+        if task is None:
+            task = VideoReportTask(
+                session_id=session_id,
+                status=status,
+                error=error[:1000],
+            )
+            db.add(task)
+        else:
+            task.status = status
+            task.error = error[:1000]
+        db.commit()
+
+
+def generate_video_report_background(session_id: str):
+    """面试结束后在后台统一评分并生成报告，不占用实时面试链路。"""
+    try:
+        _set_report_task(session_id, "running")
+
+        # 延迟导入，避免 video_routes 与 main.py 在应用启动时形成循环依赖。
+        try:
+            from main import evaluate_finished_session, create_interview_report
+        except ImportError:
+            from backend.main import evaluate_finished_session, create_interview_report
+
+        evaluation = evaluate_finished_session(session_id)
+        if not evaluation.get("evaluated"):
+            raise ValueError("有效问答不足，暂时无法生成完整报告")
+
+        result = asyncio.run(create_interview_report(session_id))
+        if not isinstance(result, dict) or not result.get("report"):
+            raise RuntimeError("报告生成未返回有效结果")
+
+        _set_report_task(session_id, "completed")
+        print(f"[视频面试报告] {session_id} 已生成并保存", flush=True)
+
+    except Exception as exc:
+        _set_report_task(session_id, "failed", str(exc))
+        print(
+            f"[视频面试报告] {session_id} 生成失败：{type(exc).__name__}: {exc}",
+            flush=True,
+        )
 
 
 @router.post("/session")
@@ -81,7 +148,7 @@ def create_video_session(data: VideoSessionRequest):
 7. 计划提问数量约为 {data.max_questions} 道。
 8. 压力面试模式：{"开启，适当增加追问和问题深度" if data.pressure_mode else "关闭，保持正常复试交流节奏"}。
 9. 不要一次性输出整套题目，不要在每道题后给分。
-10. 面试结束时给出整场综合评价，包括专业基础、表达逻辑、项目理解、知识掌握和改进建议。
+10. 面试结束时只需自然结束交流，不要生成评分或长篇报告；系统会在结束后独立生成正式报告。
 11. 不得编造考生简历内容或虚构标准答案。
 12. 语言简洁，符合真实研究生复试现场交流习惯。
 """
@@ -102,8 +169,31 @@ def create_video_session(data: VideoSessionRequest):
 
     try:
         session = duplex_runtime.STATE.create(config)
+        with SessionLocal() as db:
+            user = db.get(User, data.user_id)
+            if user is None:
+                user = User(id=data.user_id, profile={})
+                db.add(user)
+                db.flush()
+
+            db.add(
+                InterviewSession(
+                    id=session.id,
+                    user_id=data.user_id,
+                    mode="408",
+                    phase="intro",
+                )
+            )
+            db.commit()
+
         return {"ok": True, "session_id": session.id}
+    except HTTPException:
+        raise
     except Exception as exc:
+        try:
+            duplex_runtime.STATE.close(session.id)
+        except Exception:
+            pass
         raise HTTPException(status_code=502, detail=f"豆包实时会话创建失败：{exc}")
 
 
@@ -118,7 +208,7 @@ async def video_events(session_id: str):
             except queue.Empty:
                 event = {"type": "local.ping", "ts": time.time()}
 
-            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\\n\\n"
 
             if event.get("type") == "local.closed":
                 break
@@ -152,6 +242,103 @@ def commit_video_audio(data: SessionRequest):
 def send_video_text(data: TextRequest):
     get_session(data.session_id).send_text(data.text)
     return {"ok": True}
+
+
+@router.post("/finish")
+def finish_video_session(
+    data: FinishVideoRequest,
+    background_tasks: BackgroundTasks,
+):
+    """先保存面试转写并立即结束面试，再由后台生成评分报告。"""
+    with SessionLocal() as db:
+        session = db.get(InterviewSession, data.session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="面试场次不存在")
+
+        task = db.get(VideoReportTask, data.session_id)
+        if session.phase == "finished":
+            if task and task.status == "completed":
+                return {"ok": True, "status": "completed"}
+            if task and task.status == "running":
+                return {"ok": True, "status": "running"}
+            if task is None:
+                task = VideoReportTask(
+                    session_id=data.session_id,
+                    status="pending",
+                    error="",
+                )
+                db.add(task)
+            else:
+                task.status = "pending"
+                task.error = ""
+        else:
+            # 保留对话顺序，转换为现有面试报告模块使用的角色标识。
+            last_item = None
+            for item in data.messages[:200]:
+                content = item.text.strip()
+                if not content:
+                    continue
+                role = "candidate" if item.role == "考生" else "interviewer"
+                key = (role, content)
+                if key == last_item:
+                    continue
+                db.add(
+                    InterviewMessage(
+                        session_id=data.session_id,
+                        role=role,
+                        content=content,
+                    )
+                )
+                last_item = key
+
+            session.phase = "finished"
+            session.ended_at = datetime.utcnow()
+            if task is None:
+                task = VideoReportTask(
+                    session_id=data.session_id,
+                    status="pending",
+                    error="",
+                )
+                db.add(task)
+            else:
+                task.status = "pending"
+                task.error = ""
+
+        db.commit()
+
+    background_tasks.add_task(
+        generate_video_report_background,
+        data.session_id,
+    )
+    return {"ok": True, "status": "pending"}
+
+
+@router.get("/report-status/{session_id}")
+def get_video_report_status(session_id: str):
+    with SessionLocal() as db:
+        session = db.get(InterviewSession, session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="面试场次不存在")
+
+        task = db.get(VideoReportTask, session_id)
+        report = db.query(InterviewReport).filter(
+            InterviewReport.session_id == session_id
+        ).order_by(InterviewReport.id.desc()).first()
+
+        if report is not None:
+            return {
+                "session_id": session_id,
+                "status": "completed",
+                "report": json.loads(report.content),
+                "error": "",
+            }
+
+        return {
+            "session_id": session_id,
+            "status": task.status if task else "pending",
+            "report": None,
+            "error": task.error if task else "",
+        }
 
 
 @router.post("/close")
