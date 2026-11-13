@@ -670,11 +670,15 @@ const getSessionStatus = (session: InterviewSession) => {
   if (showVideoInterview) {
     return (
       <VideoInterview
+        userId={getMemoryUserId()}
         defaultPressureMode={defaultPressureMode}
         defaultQuestionCount={defaultQuestionCount}
         onBack={() => {
           setShowVideoInterview(false)
           setActiveNav('工作台')
+          setReportsLoaded(false)
+          setSelectedReport(null)
+          setSelectedReportSessionId(null)
         }}
       />
     )
