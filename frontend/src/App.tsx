@@ -318,6 +318,25 @@ useEffect(() => {
   }
 }, [activeNav, reportsLoaded, loadInterviewSessions])
 
+  // 视频面试报告在后台生成时，自动刷新历史记录状态。
+  useEffect(() => {
+    const hasBackgroundReports = interviewSessions.some(
+      (session) =>
+        session.finished &&
+        !session.has_report &&
+        ['pending', 'running'].includes(session.report_status || ''),
+    )
+    if (!reportsLoaded || !hasBackgroundReports) return
+
+    const timer = window.setInterval(() => {
+      if (!reportsRequestInFlight.current) {
+        void loadInterviewSessions()
+      }
+    }, 5000)
+
+    return () => window.clearInterval(timer)
+  }, [interviewSessions, reportsLoaded, loadInterviewSessions])
+
   // 格式化报告字段，兼容字符串、数组和对象
 // 将报告中的数组和对象转换为易读的分层文本
 const formatReportValue = (value: unknown): string => {
@@ -431,6 +450,14 @@ const formatReportValue = (value: unknown): string => {
   ) => {
     if (!session.finished) {
       setReportDetailError('这场面试尚未完成，暂时不能查看或生成正式报告。')
+      return
+    }
+
+    if (
+      !session.has_report &&
+      ['pending', 'running'].includes(session.report_status || '')
+    ) {
+      setReportDetailError('本场视频面试报告正在后台生成，请稍后刷新查看。')
       return
     }
 
@@ -656,6 +683,8 @@ const getPhaseLabel = (phase: string) => {
 const getSessionStatus = (session: InterviewSession) => {
   if (!session.finished) return '进行中'
   if (session.has_report) return '报告已生成'
+  if (['pending', 'running'].includes(session.report_status || '')) return '报告生成中'
+  if (session.report_status === 'failed') return '报告生成失败'
   return '待生成报告'
 }
   const handleFeatureClick = (target: string) => {
@@ -1589,17 +1618,27 @@ const getSessionStatus = (session: InterviewSession) => {
                     const isGenerating =
                       reportActionSessionId === session.session_id
 
+                    const isBackgroundAnalyzing =
+                      !session.has_report &&
+                      ['pending', 'running'].includes(session.report_status || '')
+
                     const statusText = !session.finished
                       ? '面试未完成'
                       : session.has_report
                         ? '报告已生成'
-                        : '待生成报告'
+                        : isBackgroundAnalyzing
+                          ? '报告生成中'
+                          : session.report_status === 'failed'
+                            ? '报告生成失败'
+                            : '待生成报告'
 
                     const statusClass = !session.finished
                       ? 'border-amber-300/20 bg-amber-400/10 text-amber-200'
                       : session.has_report
                         ? 'border-emerald-300/20 bg-emerald-400/10 text-emerald-200'
-                        : 'border-blue-300/20 bg-blue-400/10 text-blue-200'
+                        : session.report_status === 'failed'
+                          ? 'border-amber-300/20 bg-amber-400/10 text-amber-200'
+                          : 'border-blue-300/20 bg-blue-400/10 text-blue-200'
 
                     return (
                       <div
@@ -1653,7 +1692,7 @@ const getSessionStatus = (session: InterviewSession) => {
                                     !session.has_report,
                                   )
                                 }
-                                disabled={reportDetailLoading}
+                                disabled={reportDetailLoading || isBackgroundAnalyzing}
                                 className="flex items-center gap-2 rounded-lg bg-gradient-to-r from-violet-400 to-indigo-400 px-3.5 py-2.5 text-xs font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
                               >
                                 {isGenerating ? (
@@ -1666,12 +1705,19 @@ const getSessionStatus = (session: InterviewSession) => {
                                       ? '加载中'
                                       : '生成中'}
                                   </>
+                                ) : isBackgroundAnalyzing ? (
+                                  <>
+                                    <RefreshCw size={14} className="animate-spin" />
+                                    后台分析中
+                                  </>
                                 ) : (
                                   <>
                                     <FileText size={14} />
                                     {session.has_report
                                       ? '查看报告'
-                                      : '生成报告'}
+                                      : session.report_status === 'failed'
+                                        ? '重试生成'
+                                        : '生成报告'}
                                   </>
                                 )}
                               </button>
@@ -2221,11 +2267,17 @@ const getSessionStatus = (session: InterviewSession) => {
         {recentSessions.map((session) => {
           const status = getSessionStatus(session)
 
+          const isBackgroundAnalyzing =
+            !session.has_report &&
+            ['pending', 'running'].includes(session.report_status || '')
+
           const statusClass = !session.finished
             ? 'border-amber-300/20 bg-amber-400/10 text-amber-200'
             : session.has_report
               ? 'border-emerald-300/20 bg-emerald-400/10 text-emerald-200'
-              : 'border-blue-300/20 bg-blue-400/10 text-blue-200'
+              : session.report_status === 'failed'
+                ? 'border-amber-300/20 bg-amber-400/10 text-amber-200'
+                : 'border-blue-300/20 bg-blue-400/10 text-blue-200'
 
           return (
             <div
@@ -2282,7 +2334,8 @@ const getSessionStatus = (session: InterviewSession) => {
                       }
                     }}
                     disabled={
-                      reportDetailLoading && session.finished
+                      (reportDetailLoading && session.finished) ||
+                      isBackgroundAnalyzing
                     }
                     className="flex items-center gap-1.5 rounded-lg border border-violet-300/20 bg-violet-400/10 px-3 py-2 text-xs text-violet-100 transition hover:bg-violet-400/20 disabled:cursor-not-allowed disabled:opacity-50"
                   >
@@ -2290,7 +2343,11 @@ const getSessionStatus = (session: InterviewSession) => {
                     {session.finished
                       ? session.has_report
                         ? '查看报告'
-                        : '生成报告'
+                        : isBackgroundAnalyzing
+                          ? '后台分析中'
+                          : session.report_status === 'failed'
+                            ? '重试生成'
+                            : '生成报告'
                       : '查看记录'}
                   </button>
                 </div>
