@@ -43,8 +43,9 @@ export default function VideoInterview({
   const websocketRef = useRef<WebSocket | null>(null)
   const sessionIdRef = useRef('')
   const audioQueueRef = useRef<Uint8Array[]>([])
-  const outputAudioChunksRef = useRef<Uint8Array[]>([])
   const outputSourceRef = useRef<AudioBufferSourceNode | null>(null)
+  const outputSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set())
+  const outputNextTimeRef = useRef(0)
   const mountedRef = useRef(true)
   const micEnabledRef = useRef(true)
 
@@ -240,81 +241,25 @@ export default function VideoInterview({
     processorRef.current = processor
 
     let pending: number[] = []
-    let speechStarted = false
-    let silenceFrames = 0
-    let commitInProgress = false
 
-    async function commitUtterance() {
-      if (!speechStarted || commitInProgress) return
-
-      commitInProgress = true
-      speechStarted = false
-      silenceFrames = 0
-
-      try {
-        // 发送最后不足 100ms 的音频。WebSocket 保证同一连接内帧顺序，
-        // commit 控制帧会排在此前所有 PCM 二进制帧之后。
-        if (pending.length) {
-          audioQueueRef.current.push(new Uint8Array(pending.splice(0, pending.length)))
-        }
-        flushAudioQueue()
-
-        const socket = websocketRef.current
-        if (socket && socket.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify({ type: 'audio_commit' }))
-          console.log('本轮语音已提交，等待面试官回答')
-        } else {
-          throw new Error('实时连接已断开，请重新开始面试。')
-        }
-      } catch (err) {
-        if (mountedRef.current) {
-          setError(err instanceof Error ? err.message : '语音提交失败')
-        }
-      } finally {
-        commitInProgress = false
-      }
-    }
-
+    // Seeduplex 3.0 是全双工语音模型：持续上送麦克风 PCM（包括静音），
+    // 不在本地做“停顿判句”或发送 input_audio_buffer.commit。
+    // 这样豆包可以边听边判断轮次，用户也能在面试官说话时自然插话。
     processor.onaudioprocess = event => {
-      if (!micEnabledRef.current || !sessionIdRef.current || commitInProgress) {
-        return
-      }
+      if (!micEnabledRef.current || !sessionIdRef.current) return
 
-      const input = event.inputBuffer.getChannelData(0)
+      const pcm = downsampleToPcm16(
+        event.inputBuffer.getChannelData(0),
+        context.sampleRate,
+      )
+      for (let i = 0; i < pcm.length; i++) pending.push(pcm[i])
 
-      // 计算音量 RMS，用于检测用户是否停止说话
-      let energy = 0
-      for (let i = 0; i < input.length; i++) {
-        energy += input[i] * input[i]
-      }
-      const rms = Math.sqrt(energy / input.length)
-
-      const pcm = downsampleToPcm16(input, context.sampleRate)
-      for (let i = 0; i < pcm.length; i++) {
-        pending.push(pcm[i])
-      }
-
-      // 每约 100ms 发送一批音频
+      // 约 100ms 一包，保持连续音频流与服务端保活。
       const batchSize = 3200
       while (pending.length >= batchSize) {
-        const batch = new Uint8Array(pending.splice(0, batchSize))
-        audioQueueRef.current.push(batch)
+        audioQueueRef.current.push(new Uint8Array(pending.splice(0, batchSize)))
       }
-
       void flushAudioQueue()
-
-      // RMS 超过阈值，认为用户正在说话
-      if (rms >= 0.012) {
-        speechStarted = true
-        silenceFrames = 0
-      } else if (speechStarted) {
-        silenceFrames += 1
-      }
-
-      // 连续约 0.5 秒静音，自动提交本轮回答
-      if (speechStarted && silenceFrames >= 6) {
-        void commitUtterance()
-      }
     }
 
     source.connect(processor)
@@ -357,106 +302,84 @@ export default function VideoInterview({
     }
 
     if (type === 'response.output_audio.started') {
-      outputAudioChunksRef.current = []
-
-      if (outputSourceRef.current) {
-        try {
-          outputSourceRef.current.stop()
-        } catch {
-          // 忽略已经结束的音频
-        }
-        outputSourceRef.current = null
+      // 新一轮输出开始时清理上一轮尚未播放完的片段。
+      for (const source of outputSourcesRef.current) {
+        try { source.stop() } catch { /* 已结束 */ }
       }
-
+      outputSourcesRef.current.clear()
+      outputSourceRef.current = null
+      outputNextTimeRef.current = 0
       setAvatarState('speaking')
       return
     }
 
     if (type === 'response.output_audio.delta') {
       const encoded = String(event.audio || event.delta || '')
-      if (encoded) {
-        try {
-          const binary = atob(encoded)
-          const bytes = new Uint8Array(binary.length)
-          for (let i = 0; i < binary.length; i++) {
-            bytes[i] = binary.charCodeAt(i)
-          }
-          outputAudioChunksRef.current.push(bytes)
-        } catch {
-          // 忽略无法解析的音频片段
+      if (!encoded) return
+
+      const context = audioContextRef.current
+      if (!context || context.state === 'closed') {
+        setError('音频播放环境尚未准备好，请重新开始面试。')
+        return
+      }
+
+      try {
+        const binary = atob(encoded)
+        const pcmBytes = new Uint8Array(binary.length)
+        for (let i = 0; i < binary.length; i++) {
+          pcmBytes[i] = binary.charCodeAt(i)
         }
+
+        // 每收到一个豆包音频 delta 就立即排入 Web Audio 播放队列，
+        // 不再等 response.output_audio.done 后才播放整段音频。
+        const sampleCount = Math.floor(pcmBytes.length / 2)
+        if (!sampleCount) return
+
+        const audioBuffer = context.createBuffer(1, sampleCount, 24000)
+        const channel = audioBuffer.getChannelData(0)
+        const view = new DataView(pcmBytes.buffer, pcmBytes.byteOffset, sampleCount * 2)
+        for (let i = 0; i < sampleCount; i++) {
+          channel[i] = view.getInt16(i * 2, true) / 32768
+        }
+
+        const source = context.createBufferSource()
+        source.buffer = audioBuffer
+        source.connect(context.destination)
+        outputSourcesRef.current.add(source)
+        outputSourceRef.current = source
+
+        const startAt = Math.max(context.currentTime + 0.035, outputNextTimeRef.current)
+        outputNextTimeRef.current = startAt + audioBuffer.duration
+        source.onended = () => {
+          outputSourcesRef.current.delete(source)
+          if (outputSourceRef.current === source) outputSourceRef.current = null
+          if (mountedRef.current && outputSourcesRef.current.size === 0) {
+            setAvatarState('standby')
+          }
+        }
+
+        void context.resume().then(() => {
+          if (context.state !== 'closed' && outputSourcesRef.current.has(source)) {
+            source.start(startAt)
+          }
+        }).catch(() => {
+          outputSourcesRef.current.delete(source)
+          setError('面试官语音播放失败，请检查浏览器声音权限。')
+          setAvatarState('standby')
+        })
+      } catch {
+        // 忽略无法解析的音频片段
       }
       return
     }
 
     if (type === 'response.output_audio.done') {
-      const chunks = outputAudioChunksRef.current.splice(0)
-
-      if (!chunks.length) {
-        setAvatarState('standby')
-        return
-      }
-
-      const context = audioContextRef.current
-      if (!context || context.state === 'closed') {
-        setError('音频播放环境尚未准备好，请重新开始面试。')
-        setAvatarState('standby')
-        return
-      }
-
-      const totalBytes = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
-      const pcmBytes = new Uint8Array(totalBytes)
-
-      let offset = 0
-      for (const chunk of chunks) {
-        pcmBytes.set(chunk, offset)
-        offset += chunk.length
-      }
-
-      // PCM S16LE：16 位有符号小端整数，单声道，24000 Hz
-      const sampleCount = Math.floor(pcmBytes.length / 2)
-
-      if (!sampleCount) {
-        setAvatarState('standby')
-        return
-      }
-
-      const audioBuffer = context.createBuffer(1, sampleCount, 24000)
-      const channel = audioBuffer.getChannelData(0)
-      const view = new DataView(pcmBytes.buffer, pcmBytes.byteOffset, sampleCount * 2)
-
-      for (let i = 0; i < sampleCount; i++) {
-        channel[i] = view.getInt16(i * 2, true) / 32768
-      }
-
-      const source = context.createBufferSource()
-      source.buffer = audioBuffer
-      source.connect(context.destination)
-      outputSourceRef.current = source
-
-      source.onended = () => {
-        if (outputSourceRef.current === source) {
-          outputSourceRef.current = null
-        }
-        if (mountedRef.current) setAvatarState('standby')
-      }
-
-      void context.resume().then(() => {
-        if (context.state !== 'closed') {
-          source.start()
-        }
-      }).catch(() => {
-        setError('面试官语音播放失败，请检查浏览器声音权限。')
-        setAvatarState('standby')
-      })
-
+      if (outputSourcesRef.current.size === 0) setAvatarState('standby')
       return
     }
 
     if (type === 'response.done') {
-      if (!outputSourceRef.current) {
-        setAvatarState('standby')
-      }
+      if (outputSourcesRef.current.size === 0) setAvatarState('standby')
       return
     }
 
