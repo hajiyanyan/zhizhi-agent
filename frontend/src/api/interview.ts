@@ -600,6 +600,7 @@ export interface InterviewSession {
   title: string | null
   finished: boolean
   has_report: boolean
+  report_status?: 'not_started' | 'pending' | 'running' | 'completed' | 'failed' | string
 }
 
 export interface InterviewSessionsResponse {
