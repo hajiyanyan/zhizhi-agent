@@ -22,6 +22,7 @@ from services.models import (
     User,
     InterviewSession,
     InterviewMessage,
+    Evaluation,
     InterviewReport,
     VideoReportTask,
 )
@@ -103,22 +104,12 @@ def generate_video_report_background(session_id: str):
                 .where(InterviewReport.session_id == session_id)
                 .order_by(InterviewReport.id.desc())
             )
-            existing_evaluation = db.scalar(
-                select(InterviewMessage.id)
-                .where(InterviewMessage.session_id == session_id)
-                .limit(1)
-            )
-            evaluation_count = db.query(InterviewReport).filter(
-                InterviewReport.session_id == session_id
-            ).count()
-
         if existing_report is not None:
             _set_report_task(session_id, "completed")
             return
 
         # 若之前已完成评分、仅报告生成失败，则复用评分结果，避免重试时重复写入评价。
         with SessionLocal() as db:
-            from services.models import Evaluation
             has_evaluations = db.query(Evaluation.id).filter(
                 Evaluation.session_id == session_id
             ).first() is not None
