@@ -248,12 +248,13 @@ export default function VideoInterview({
     // 不在本地做“停顿判句”或发送 input_audio_buffer.commit。
     // 这样豆包可以边听边判断轮次，用户也能在面试官说话时自然插话。
     processor.onaudioprocess = event => {
-      if (!micEnabledRef.current || !sessionIdRef.current) return
+      if (!sessionIdRef.current) return
 
-      const pcm = downsampleToPcm16(
-        event.inputBuffer.getChannelData(0),
-        context.sampleRate,
-      )
+      // 麦克风关闭时仍发送等长静音帧，维持 Seeduplex 全双工上行保活。
+      const input = micEnabledRef.current
+        ? event.inputBuffer.getChannelData(0)
+        : new Float32Array(event.inputBuffer.length)
+      const pcm = downsampleToPcm16(input, context.sampleRate)
       for (let i = 0; i < pcm.length; i++) pending.push(pcm[i])
 
       // 约 100ms 一包，保持连续音频流与服务端保活。
